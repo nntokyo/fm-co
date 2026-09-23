@@ -1,295 +1,211 @@
 # fm-co
 
-Codex の利用上限に到達したとき、作業を中断せず **FM Chat に安全にフォールバックするための構成**を定義するプロジェクトです。
+Token-aware multi-provider CLI for **Codex, Claude Code, Grok Build, LLOMA, and FM**.
 
-> [!IMPORTANT]
-> 現在、このリポジトリにフォールバック機能の実装コードはありません。
-> 本 README は要件・基本設計・詳細設計・実装方針を定義するものです。
+`fm-co` keeps coding work moving when a provider reaches an explicit usage/quota limit. It can also use the LLOMA project's **LocalJev / System One** classifier to send simple text-only work to a local model first, reducing cloud-agent token consumption.
 
-## 目的
+## Status
 
-通常時は Codex を使用し、Codex が**利用上限到達を明示的に返した場合のみ** FM Chat に切り替える仕組みを目指します。
+Initial CLI implementation. Automatic fallback is intentionally conservative: authentication errors, network failures, timeouts, generic rate limits, and unknown failures do **not** cause a prompt to be sent to another cloud provider.
 
-目標とする動作:
+## Install
+
+From GitHub:
+
+```bash
+npm install -g github:nntokyo/fm-co
+```
+
+After an npm registry release:
+
+```bash
+npm install -g fm-co
+```
+
+Requires Node.js 24 or later.
+
+Provider CLIs are installed separately so they can follow each vendor's current supported installer and update cadence:
+
+```bash
+# Codex
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+
+# Grok Build
+curl -fsSL https://x.ai/cli/install.sh | bash
+
+# Claude Code
+# Use Anthropic's current native installer documented for Claude Code.
+```
+
+Then authenticate each provider normally (`codex`, `claude`, `grok`). `fm-co` reuses their existing login state.
+
+## Quick start
+
+```bash
+fm-co "Fix the failing tests and update the implementation"
+```
+
+Default provider order:
 
 ```text
-User
-  |
-  v
-fm-co
-  |
-  +--> Codex
-  |      |
-  |      +-- success --------------------> response
-  |      |
-  |      +-- explicit quota/limit error
-  |                |
-  |                v
-  +------------> FM Chat ----------------> response
+codex -> claude -> grok -> lloma -> fm
 ```
 
-## 現在の機能
+Choose the chain explicitly:
 
-現時点では次の状態です。
-
-- Codex から FM Chat への自動切替: **未実装**
-- Codex の利用上限検出: **未実装**
-- FM Chat クライアント: **未実装**
-- 設定ファイル/CLI: **未実装**
-- テスト: **未実装**
-- 本リポジトリ: **設計・実装準備段階**
-
-Codex 自体が FM Chat を直接サポートしている、または Codex の内部機能として FM Chat が利用できる、という意味ではありません。fm-co 側に明示的なフォールバック層を実装する想定です。
-
-## 基本設計
-
-### 1. コンポーネント
-
-| コンポーネント | 責務 |
-| --- | --- |
-| Router | Codex を優先して呼び出し、結果を判定する |
-| Codex Adapter | Codex へのリクエスト/レスポンスを抽象化する |
-| Limit Detector | 利用上限・クォータ到達を判定する |
-| FM Adapter | FM Chat へのリクエスト/レスポンスを抽象化する |
-| Config | 接続先、モデル、タイムアウト等を管理する |
-| Logger | シークレットを除外した運用ログを記録する |
-
-### 2. フォールバック方針
-
-FM Chat へ切り替えるのは、Codex 側から取得した**公式かつ明示的な利用上限・クォータ到達シグナル**を判定できた場合に限定します。
-
-以下は自動フォールバック対象にしません。
-
-- 認証エラー
-- 権限不足
-- 入力不正
-- ネットワーク障害
-- Codex 側の一時的な 5xx
-- 原因不明の例外
-- 単なるタイムアウト
-- 実装側のバグ
-
-これにより、「Codex の失敗なら何でも FM に送る」という誤動作を避けます。
-
-### 3. フェイルセーフ
-
-- Codex の再試行は回数上限を設ける
-- FM Chat の再試行も回数上限を設ける
-- Codex → FM → Codex のような循環切替は禁止する
-- 判定不能なエラーはそのまま呼び出し元へ返す
-- FM Chat も利用不可なら、原因を区別して終了する
-
-## 詳細設計
-
-### リクエストフロー
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant R as Router
-    participant C as Codex Adapter
-    participant D as Limit Detector
-    participant F as FM Adapter
-
-    U->>R: request
-    R->>C: execute(request)
-
-    alt Codex success
-        C-->>R: response
-        R-->>U: response
-    else Codex error
-        C-->>R: error
-        R->>D: classify(error)
-
-        alt Explicit quota/limit reached
-            D-->>R: FALLBACK_ALLOWED
-            R->>F: execute(request)
-            F-->>R: response / error
-            R-->>U: response / error
-        else Other error
-            D-->>R: FALLBACK_DENIED
-            R-->>U: original error
-        end
-    end
+```bash
+fm-co --providers codex,claude,grok "Implement issue #42"
+fm-co --providers grok,codex "Review this repository"
+fm-co --provider lloma "Explain the difference between a mutex and semaphore"
 ```
 
-### エラー分類
+If Codex reaches an explicit usage limit before changing the Git workspace, `fm-co` can continue with Claude, then Grok. If a provider modifies the Git workspace before failing, automatic fallback stops to reduce duplicate side effects.
 
-内部では最低限、次のような分類を想定します。
+## Jev: reduce cloud token use
+
+The LLOMA repository runs LocalJev with the TypeSafe System One API and `jwenv:1.7b`. Configure it with:
+
+```bash
+export FM_CO_JEV_URL="http://gpu-host:8080"
+```
+
+`fm-co` sends only the first 4096 characters of the prompt to `POST /v1/systemone`. Jev chooses only between:
+
+- `local_text`: text-only work with no repository inspection, file changes, commands, tests, tools, or side effects.
+- `agentic_code`: work that needs an agentic coding environment.
+
+For `local_text`, LLOMA is moved to the front when LLOMA credentials exist. For `agentic_code`, the requested cloud-agent order is kept.
+
+Disable Jev per command:
+
+```bash
+fm-co --no-jev "Fix this repository"
+```
+
+Inspect the decision without running a provider:
+
+```bash
+fm-co --dry-run "Explain this error message"
+```
+
+If LocalJev is unreachable, `fm-co` can use LLOMA's `ollama/jwenv:1.7b` as the lightweight classifier. If that is also unavailable, routing fails open to the configured provider order rather than blocking work.
+
+## LLOMA configuration
+
+`fm-co` uses the OpenAI-compatible endpoint already provided by `lloma.n-n.tokyo`.
+
+Authentication priority:
+
+1. `LLOMA_API_KEY`
+2. the `default` profile token in `~/.config/lloma/config.toml`
+
+Defaults:
 
 ```text
-SUCCESS
-CODEX_QUOTA_EXCEEDED
-CODEX_RATE_LIMITED
-AUTHENTICATION_ERROR
-PERMISSION_ERROR
-INVALID_REQUEST
-NETWORK_ERROR
-TIMEOUT
-UPSTREAM_ERROR
-UNKNOWN_ERROR
-FM_ERROR
+endpoint: https://lloma.n-n.tokyo/api/openai/v1
+model:    ollama/qwen2.5-coder:14b
 ```
 
-ただし、`CODEX_RATE_LIMITED` を即座に FM フォールバックへ結び付けるかは、実装時に利用している公式 API/CLI の仕様を確認して決定します。一時的なレート制限と、長時間継続する利用上限は同一ではないためです。
+Overrides:
 
-### 再実行安全性
-
-フォールバックは、同じリクエストを別プロバイダーへ再送する処理です。そのため、副作用を伴う処理では重複実行を防ぐ必要があります。
-
-- Codex 側でファイル変更、外部 API 更新、Issue/PR 作成などの副作用が発生した後は、自動フォールバックしない
-- フォールバック可能なのは、原則として「副作用が発生していない」と確認できる段階に限定する
-- 将来ツール実行を扱う場合は、実行 ID・冪等性キー・チェックポイント等で重複実行を防止する
-- 副作用の有無を判定できない場合は安全側に倒し、元のエラーを返す
-
-### 判定ルール
-
-フォールバック判定では、次の優先順位を使用します。
-
-1. 公式 SDK/API/CLI が提供する構造化エラーコード
-2. 公式レスポンスの HTTP ステータスとエラー種別
-3. 公式に仕様化された終了コード
-4. 上記で判定できない場合は `UNKNOWN_ERROR`
-
-エラーメッセージ本文の文字列一致だけに依存した判定は原則として使用しません。文言変更やローカライズで壊れる可能性があるためです。
-
-## 設定案
-
-実装時には、環境変数または設定ファイルから次の値を渡せるようにします。
-
-```env
-FM_CO_PRIMARY_PROVIDER=codex
-FM_CO_FALLBACK_PROVIDER=fm
-
-FM_CO_CODEX_MODEL=
-FM_CO_FM_MODEL=
-
-FM_CO_REQUEST_TIMEOUT_SECONDS=120
-FM_CO_CODEX_MAX_RETRIES=1
-FM_CO_FM_MAX_RETRIES=1
-
-FM_CO_LOG_LEVEL=info
+```bash
+export FM_CO_LLOMA_ENDPOINT="https://lloma.n-n.tokyo/api/openai/v1"
+export FM_CO_LLOMA_MODEL="ollama/qwen2.5-coder:14b"
 ```
 
-認証情報は設定ファイルへ平文保存せず、環境変数・OS のシークレットストア・CI/CD の Secret 機能などを利用します。
+The existing LLOMA CLI can create the saved token:
 
-## セキュリティ
+```bash
+lloma login
+```
 
-以下を必須要件とします。
+## Custom FM command
 
-- API キー、アクセストークン、Cookie をログ出力しない
-- Authorization ヘッダーをマスクする
-- プロンプト本文のログ保存は既定で無効にする
-- FM Chat へ送信する前に、送信先が意図したエンドポイントであることを検証する
-- TLS 証明書検証を無効化しない
-- 依存パッケージはサポート対象の最新安定版を基準に検証する
-- 依存バージョン更新時は回帰テストを実施する
+Configure any command as the final FM provider. The prompt is written to stdin; it is not interpolated into a shell command.
 
-## 互換性方針
+```bash
+export FM_CO_FM_COMMAND="my-fm-chat"
+export FM_CO_FM_ARGS_JSON='["--mode","chat"]'
 
-Codex、FM Chat、SDK、CLI の仕様は変更される可能性があります。
+fm-co --providers codex,fm "Review this patch"
+```
 
-そのため実装では以下を行います。
+## Provider overrides
 
-- 未公開 API や内部実装に依存しない
-- 公式に公開されたインターフェースを優先する
-- サポート対象バージョンを CI で固定・検証する
-- 最新安定版への更新を定期的に検証する
-- エラーコードやレスポンス形式の変更をテストで検知する
+Commands can be replaced without changing source:
 
-## テスト方針
+```bash
+export FM_CO_CODEX_COMMAND="codex"
+export FM_CO_CLAUDE_COMMAND="claude"
+export FM_CO_GROK_COMMAND="grok"
+```
 
-### Unit Test
+Additional arguments must be JSON string arrays:
 
-- Codex 正常時に FM を呼ばない
-- 利用上限到達時だけ FM を呼ぶ
-- 認証エラー時に FM を呼ばない
-- タイムアウト時に無条件フォールバックしない
-- FM 失敗時に無限リトライしない
-- シークレットがログに含まれない
+```bash
+export FM_CO_CODEX_ARGS_JSON='["--model","gpt-5.6-codex"]'
+export FM_CO_CLAUDE_ARGS_JSON='[]'
+export FM_CO_GROK_ARGS_JSON='[]'
+```
 
-### Integration Test
+`fm-co` does not add flags that disable sandboxing or bypass approval controls.
 
-Codex/FM の実サービスを直接前提にせず、まずはモック/スタブで以下を再現します。
+## Fallback policy
 
-- Codex success
-- explicit quota exceeded
-- temporary rate limit
-- authentication error
-- network failure
-- FM success
-- FM failure
+Automatic transition to the next cloud provider requires an explicit quota/usage exhaustion signal. A generic `429 Too Many Requests` alone does not qualify.
 
-### Adversarial Review
+The chain stops on authentication failures, network failures, timeouts, permission errors, invalid requests, unknown failures, or when the Git workspace changed during the failed attempt.
 
-実装前後に、少なくとも以下を確認します。
+A provider executable that is not installed is treated as unavailable and can be skipped when more providers remain.
 
-- 利用上限ではない障害を誤判定していないか
-- エラーメッセージ変更だけで判定不能にならないか
-- FM 側障害で再帰・無限ループしないか
-- 同一プロンプトが意図せず複数回実行されないか
-- ツール実行を伴うリクエストが二重実行されないか
-- 秘密情報や個人情報がフォールバック先へ意図せず転送されないか
-- Codex と FM で機能差がある場合に結果を同等と誤認しないか
-
-## 実装ロードマップ
-
-- [x] README に要件と設計を定義
-- [ ] Codex Adapter を実装
-- [ ] FM Adapter を実装
-- [ ] Limit Detector を実装
-- [ ] Router を実装
-- [ ] Config/Secret 管理を実装
-- [ ] Unit Test を追加
-- [ ] Integration Test を追加
-- [ ] CLI を追加
-- [ ] CI を追加
-- [ ] 実環境で互換性を検証
-
-## 想定ディレクトリ構成
-
-実装時の初期案です。
+## CLI
 
 ```text
-fm-co/
-├── README.md
-├── src/
-│   ├── router/
-│   ├── adapters/
-│   │   ├── codex/
-│   │   └── fm/
-│   ├── errors/
-│   ├── config/
-│   └── logging/
-├── tests/
-│   ├── unit/
-│   └── integration/
-└── .github/
-    └── workflows/
+fm-co [options] <prompt...>
+
+--providers LIST   comma-separated chain
+--provider NAME    exactly one provider
+--jev              enable Jev routing (default)
+--no-jev           disable Jev routing
+--dry-run          show routing only
+--timeout MS       per-provider timeout; 0 = disabled
+--help
+--version
 ```
 
-言語・ランタイム・SDK は、FM Chat の正式な接続方式と Codex 側の公式インターフェースを確認してから決定します。
+## Development
 
-## 非目標
+```bash
+npm install
+npm test
+npm run pack:check
+```
 
-fm-co は、サービス側の利用上限を不正に回避するためのものではありません。
+Design details are in [`docs/DESIGN.md`](docs/DESIGN.md).
 
-目的は、利用可能な別プロバイダーへ**明示的かつ安全に処理を切り替えるアプリケーションレベルのフォールバック**を実装することです。
+## Security notes
 
-## 開発フロー
+- Provider processes run with `shell: false`.
+- Secrets are never intentionally printed.
+- Jev receives only a bounded prompt fragment, not repository files or environment variables.
+- Generic failures do not automatically resend the prompt to another cloud provider.
+- Git fingerprinting reduces duplicate file edits but cannot detect every external side effect.
+- Provider CLIs remain separately installed so security/compatibility updates can be applied independently.
 
-変更は Issue と Pull Request を経由します。
+## Roadmap
 
-1. Issue で目的・受け入れ条件を定義
-2. 作業ブランチを作成
-3. 基本設計・詳細設計を確認
-4. 実装とテスト
-5. 敵対レビュー
-6. Pull Request
-7. CI とレビュー通過後にマージ
-
-関連 Issue: #1
+- [x] npm-installable CLI package
+- [x] Codex / Claude / Grok / LLOMA / FM adapters
+- [x] LocalJev System One routing
+- [x] LLOMA `jwenv:1.7b` classifier fallback
+- [x] conservative quota classification
+- [x] Git workspace side-effect guard
+- [x] unit tests
+- [x] CI test + package dry-run
+- [ ] npm Trusted Publishing / first registry release
+- [ ] structured provider-specific quota codes where vendor CLIs expose stable machine-readable errors
+- [ ] optional telemetry-free token savings report
 
 ## License
 
-ライセンスはまだ定義されていません。公開・再利用条件を明確にする場合は、別途 LICENSE を追加してください。
+MIT
