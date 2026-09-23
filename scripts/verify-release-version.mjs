@@ -12,7 +12,7 @@ export function normalizeReleaseTag(tag) {
 
 export function verifyReleaseVersion(tag, version) {
   const normalized = normalizeReleaseTag(tag)
-  if (!/^\\d+\\.\\d+\\.\\d+$/.test(version)) {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
     throw new Error(`only stable X.Y.Z releases are supported: ${version}`)
   }
   if (normalized !== version) {
