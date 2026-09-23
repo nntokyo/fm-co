@@ -195,7 +195,7 @@ npm install --ignore-scripts
 npm test
 npm pack --dry-run
 npm login
-npm publish --access public
+npm publish --ignore-scripts --access public
 ```
 
 After `fm-co` exists on npmjs.com, configure its Trusted Publisher for:
