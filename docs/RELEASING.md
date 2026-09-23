@@ -83,7 +83,7 @@ package.json: 0.1.1
 GitHub tag:   v0.1.1
 ```
 
-The workflow rejects mismatches.
+The workflow rejects mismatches. Pre-release versions such as `0.2.0-beta.1` are intentionally unsupported for now so they cannot accidentally be published under the default `latest` dist-tag.
 
 ## Supply-chain controls
 
