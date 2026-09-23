@@ -41,7 +41,7 @@ Authenticate and publish:
 
 ```bash
 npm login
-npm publish --access public
+npm publish --ignore-scripts --access public
 ```
 
 Do not create or commit an `NPM_TOKEN` for this bootstrap.
@@ -74,7 +74,7 @@ Do not add `NODE_AUTH_TOKEN` or a write-capable npm token to the publish job.
 2. Run CI and merge the PR.
 3. Create a GitHub Release whose tag is exactly `v<package-version>`.
 4. Publishing the GitHub Release triggers `publish.yml`.
-5. The workflow verifies the tag/version match, tests, inspects the package tarball, and runs `npm publish --access public`.
+5. The workflow verifies the tag/version match, tests, inspects the package tarball, and runs `npm publish --ignore-scripts --access public`.
 
 Example for version 0.1.1:
 
