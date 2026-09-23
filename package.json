@@ -15,7 +15,8 @@
   ],
   "scripts": {
     "test": "node --test",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "release:verify": "node scripts/verify-release-version.mjs"
   },
   "engines": {
     "node": ">=24"
@@ -37,5 +38,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nntokyo/fm-co.git"
+  },
+  "homepage": "https://github.com/nntokyo/fm-co#readme",
+  "bugs": {
+    "url": "https://github.com/nntokyo/fm-co/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

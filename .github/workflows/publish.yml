@@ -1,0 +1,53 @@
+name: Publish npm
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: startsWith(github.event.release.tag_name, 'v') && github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Verify release commit is on main
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main || {
+            echo "Release tag must point to a commit contained in main." >&2
+            exit 1
+          }
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Use Trusted Publishing compatible npm
+        run: npm install --global npm@11.19.1 --ignore-scripts
+
+      - name: Verify release tag matches package version
+        run: node scripts/verify-release-version.mjs
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Test
+        run: npm test
+
+      - name: Verify package contents
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish --ignore-scripts --access public
