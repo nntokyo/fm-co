@@ -16,6 +16,15 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Verify release commit is on main
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main || {
+            echo "Release tag must point to a commit contained in main." >&2
+            exit 1
+          }
 
       - uses: actions/setup-node@v6
         with:
