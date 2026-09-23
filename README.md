@@ -16,7 +16,7 @@ From GitHub:
 npm install -g github:nntokyo/fm-co
 ```
 
-After an npm registry release:
+After the one-time npm Registry bootstrap release:
 
 ```bash
 npm install -g fm-co
@@ -183,6 +183,34 @@ npm run pack:check
 
 Design details are in [`docs/DESIGN.md`](docs/DESIGN.md).
 
+## Publishing
+
+The repository includes an npm Trusted Publishing workflow for releases after the initial Registry bootstrap.
+
+The one-time bootstrap is intentionally interactive:
+
+```bash
+npm view fm-co version
+npm install --ignore-scripts
+npm test
+npm pack --dry-run
+npm login
+npm publish --access public
+```
+
+After `fm-co` exists on npmjs.com, configure its Trusted Publisher for:
+
+```text
+GitHub user/org: nntokyo
+Repository:      fm-co
+Workflow file:   publish.yml
+Allowed action:  npm publish
+```
+
+For later versions, update `package.json` in a PR and publish a GitHub Release tagged exactly `v<version>`. The release workflow rejects a tag/version mismatch, runs tests and package inspection, then publishes with GitHub OIDC. No long-lived npm publish token is required.
+
+See [`docs/RELEASING.md`](docs/RELEASING.md) for the complete release procedure.
+
 ## Security notes
 
 - Provider processes run with `shell: false`.
@@ -191,6 +219,7 @@ Design details are in [`docs/DESIGN.md`](docs/DESIGN.md).
 - Generic failures do not automatically resend the prompt to another cloud provider.
 - Git fingerprinting reduces duplicate file edits but cannot detect every external side effect.
 - Provider CLIs remain separately installed so security/compatibility updates can be applied independently.
+- npm release automation uses OIDC Trusted Publishing and does not store a long-lived publish token.
 
 ## Roadmap
 
@@ -202,7 +231,8 @@ Design details are in [`docs/DESIGN.md`](docs/DESIGN.md).
 - [x] Git workspace side-effect guard
 - [x] unit tests
 - [x] CI test + package dry-run
-- [ ] npm Trusted Publishing / first registry release
+- [x] npm Trusted Publishing workflow
+- [ ] one-time npm Registry bootstrap release
 - [ ] structured provider-specific quota codes where vendor CLIs expose stable machine-readable errors
 - [ ] optional telemetry-free token savings report
 
