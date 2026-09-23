@@ -20,3 +20,10 @@ test('mismatched release tag is rejected', () => {
 test('empty release tag is rejected', () => {
   assert.throws(() => normalizeReleaseTag(''), /release tag is required/)
 })
+
+test('prerelease versions are rejected to avoid publishing them as latest', () => {
+  assert.throws(
+    () => verifyReleaseVersion('v0.2.0-beta.1', '0.2.0-beta.1'),
+    /only stable X.Y.Z releases are supported/,
+  )
+})
